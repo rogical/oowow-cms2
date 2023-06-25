@@ -1,0 +1,28 @@
+{
+  "name": "drupal/xnttmanager",
+  "description": "External Entities Manager",
+  "type": "drupal-module",
+  "homepage": "https://www.drupal.org/project/xnttmanager",
+  "authors": [
+    {
+      "name": "Valentin Guignon",
+      "homepage": "https://www.drupal.org/u/guignonv",
+      "role": "Maintainer"
+    }
+  ],
+  "support": {
+    "issues": "https://www.drupal.org/project/issues/xnttmanager",
+    "source": "https://git.drupalcode.org/project/xnttmanager"
+  },
+  "license": "GPL-2.0+",
+  "minimum-stability": "dev",
+  "repositories": {
+    "drupal": {
+      "type": "composer",
+      "url": "https://packages.drupal.org/8"
+    }
+  },
+  "require": {
+    "drupal/external_entities": "^2.0@alpha"
+  }
+}

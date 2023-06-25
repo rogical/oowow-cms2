@@ -1,0 +1,495 @@
+<?php
+
+use Drupal\Core\Entity\ContentEntityInterface;
+use Drupal\Core\Field\BaseFieldDefinition;
+use Drupal\external_entities\ExternalEntityInterface;
+
+/**
+ * @file
+ * External Entities Manager.
+ */
+
+/**
+ * Returns the list of external entity types available.
+ *
+ * @return array
+ *   an associative array which keys are external entity type machine names
+ *   and values are their associated (plural) labels.
+ */
+function get_external_entity_type_list() :array {
+  static $list;
+
+  if (!isset($list)) {
+    $list = [];
+    $xntt_types = \Drupal::service('entity_type.manager')
+      ->getStorage('external_entity_type')
+      ->getQuery()
+      ->execute()
+    ;
+    foreach ($xntt_types as $type) {
+      $list[$type] = \Drupal::service('entity_type.manager')
+        ->getDefinition($type)
+        ->getCollectionLabel()
+      ;
+    }
+  }
+
+  return $list;
+}
+
+/**
+ * Returns the list of external entity types available.
+ *
+ * @return array
+ *   an associative array which keys are external entity type machine names
+ *   and values are their associated (plural) labels.
+ */
+function get_synchronized_external_entity_list() :array {
+  static $list;
+
+  if (!isset($list)) {
+    $list = [];
+    $sync_list = \Drupal::service('entity_type.manager')
+      ->getStorage('xnttsync')
+      ->getQuery()
+      ->execute()
+    ;
+    foreach ($sync_list as $type) {
+      $list[$type] = \Drupal::service('entity_type.manager')
+        ->getDefinition($type)
+        ->getCollectionLabel()
+      ;
+    }
+  }
+
+  return $list;
+}
+
+/**
+ * Returns the list of external entity types available.
+ *
+ * @return array
+ *   an associative array which keys are external entity type machine names
+ *   and values are their associated (plural) labels.
+ */
+function get_content_entity_type_list() :array {
+  static $list;
+
+  if (!isset($list)) {
+    $list = [];
+    // @todo: Maybe extend to other content types (than nodes).
+    // This may help: https://api.drupal.org/api/drupal/core%21lib%21Drupal%21Core%21Entity%21EntityTypeBundleInfo.php/function/EntityTypeBundleInfo%3A%3AgetAllBundleInfo/9.0.x
+    $content_types = \Drupal::service('entity_type.bundle.info')
+      ->getBundleInfo('node')
+    ;
+    foreach ($content_types as $type => $value) {
+      $list['node/' . $type] = $value['label'];
+    }
+  }
+
+  return $list;
+}
+
+/**
+ * Implements hook_cron().
+ *
+ * This cron is used to launch external entities synchronization. It will
+ * start each Drupal content synchronization at the selected time, making sure
+ * the previous corresponding synchronization process has finished its job.
+ */
+function xnttmanager_cron() {
+  // Load synchronization cron entities.
+  $sync_list = \Drupal::service('entity_type.manager')
+    ->getStorage('xnttsync')
+    ->getQuery()
+    ->execute()
+  ;
+  $sync_crons = \Drupal::service('entity_type.manager')
+    ->getStorage('xnttsync')
+    ->loadMultiple($sync_list)
+  ;
+  foreach ($sync_crons as $sync_cron) {
+    // Check cron time.
+    if (empty($sync_cron->get('lastRunTime'))
+      || ($sync_cron->get('lastRunTime') + $sync_cron->get('frequency') < time())
+    ) {
+      // Cron needs to be run.
+      // Skip locked crons.
+      if ($sync_cron->get('inUse')) {
+        \Drupal::logger('xnttmanager')->warning(
+          'Cron '
+          . $sync_cron->id()
+          . ' already in use and not restarted. Cron frequency may be too short compared to the time required to run the cron or the cron crashed. You may try to re-save the cron in order to reset its lock status.'
+        );
+        continue;
+      }
+
+      // Run synchronization.
+      $sync_cron->synchronize();
+    }
+  }
+}
+
+/**
+ * Batch to try to load every entity of a given external entity type.
+ *
+ * This is a callback function for bacth processing.
+ *
+ * @param array $params
+ *   An array of parameters.
+ * @param $context
+ *   Drupal Batch API context variable.
+ */
+function bulkExternalEntitiesProcess($params, &$context) {
+
+  $xntt_type = $params['xntt_type'];
+  $entity_type = \Drupal::service('entity_type.manager')
+    ->getStorage('external_entity_type')
+    ->load($xntt_type)
+  ;
+  $storage_client = $entity_type->getStorageClient();
+  $field_mapper = $entity_type->getFieldMapper();
+  $id_field = current(array_values($field_mapper->getFieldMapping('id')));
+  // Get storage of content for synchronization if needed.
+  if (!empty($params['content_type'])) {
+    // Get content type and bundle to use.
+    list($content_type, $bundle_name) = explode(
+      '/',
+      $params['content_type']
+    );
+    $content_store = \Drupal::service('entity_type.manager')
+      ->getStorage($content_type)
+    ;
+  }
+
+  // @todo: Check if a given set of external entity ids have been specified.
+
+  if (!array_key_exists('offset', $context['sandbox'])) {
+    $context['sandbox']['offset'] = 0;
+    $context['sandbox']['count'] = $storage_client->countQuery();
+    $context['sandbox']['loaded'] = 0;
+    $context['sandbox']['saved'] = 0;
+    $context['sandbox']['new_annotations'] = 0;
+    $context['sandbox']['missing_content'] = 0;
+    $context['sandbox']['created_content'] = 0;
+    $context['sandbox']['diff_content'] = 0;
+    $context['sandbox']['updated_content'] = 0;
+    $context['sandbox']['orphan_content'] = 0;
+    $context['sandbox']['removed_content'] = 0;
+    $context['sandbox']['existing_xntt_ids'] = [];
+    $context['sandbox']['errors'] = [];
+  }
+
+  $batch_size = min(
+    5,
+    $context['sandbox']['count'] - $context['sandbox']['offset']
+  );
+  if ($context['sandbox']['offset'] < $context['sandbox']['count']) {
+    $offset = $context['sandbox']['offset'];
+    $loaded = 0;
+    $saved = 0;
+    $new_annotations = 0;
+    $xntt_store = \Drupal::service('entity_type.manager')->getStorage($xntt_type);
+    for ($i = 0; $i < $batch_size; ++$i) {
+      $content_entity = NULL;
+      try {
+        // Load entities one by one.
+        $xntt_entities = $storage_client->query([], [], $offset + $i, 1);
+        $entity_id = current($xntt_entities)[$id_field];
+        if (!empty($entity_id)) {
+          $context['sandbox']['existing_xntt_ids'][] = $entity_id;
+        }
+        $entity = $xntt_store->load($entity_id);
+        ++$loaded;
+        // Save if wanted.
+        if (!empty($params['save'])) {
+          $entity->save();
+          ++$saved;
+        }
+
+        // Add missing annotation if needed.
+        if (!empty($params['annotate']) && $entity_type->isAnnotatable()) {
+          $annotation_type = $entity_type->getAnnotationEntityTypeId();
+          $annotation_bundle = $entity_type->getAnnotationBundleId();
+          $annotation_field = $entity_type->getAnnotationFieldName();
+          $annotation_store = \Drupal::service('entity_type.manager')
+            ->getStorage($annotation_type)
+          ;
+          // Check if loaded entity has an annotation.
+          $annotation_entity = current(
+            $annotation_store->loadByProperties(
+              [$annotation_field => $entity_id]
+            )
+          );
+          // If not, create a new annotation content.
+          if (empty($annotation_entity)) {
+            $current_user = Drupal::currentUser();
+            // Link it with external entity.
+            $annotation_data = [
+              'type' => $annotation_bundle,
+              $annotation_field => $entity_id,
+              'uid' => empty($current_user) ? 1 : ($current_user->id() ?: 1),
+              'title' => $entity->label() . ' Annotation',
+            ];
+            $annotation_entity = $annotation_store->create($annotation_data);
+            $annotation_entity->save();
+            ++$new_annotations;
+          }
+        }
+
+        // Generate synchronization or synchronize content entity if needed.
+        if ((!empty($params['sync_stats']) || !empty($params['sync']))
+           && !empty($content_store)
+        ) {
+
+          // Load corresponding content.
+          $content_entity = current(
+            $content_store->loadByProperties(
+              ['xnttid' => $entity_id]
+            )
+          );
+          if (empty($content_entity)) {
+            // Content not found.
+            $context['sandbox']['missing_content']++;
+            if (!empty($params['sync_add_missing'])) {
+              // Add missing content.
+              // We add uid if not set from external entity.
+              $current_user = Drupal::currentUser();
+              $content_data = [
+                  'type' => $bundle_name,
+                  'xnttid' => $entity_id,
+                ]
+                + $entity->toArray()
+                + [
+                  'uid' => empty($current_user) ? 1 : ($current_user->id() ?: 1),
+                ]
+              ;
+              // We clear entity id to avoid conflicts.
+              // @todo: find a way to get the entitiy key field ("nid" for
+              // nodes) instead of hard-coding it. Is 'type' and 'uid' key name
+              // above also variable in some ways?
+              unset($content_data['nid']);
+              unset($content_data['uuid']);
+              $content_entity = $content_store->create($content_data);
+              $content_entity->save();
+              $context['sandbox']['created_content']++;
+            }
+          }
+          else {
+            // Check for changes.
+            $need_update = FALSE;
+            $local_values = $content_entity->toArray();
+            foreach ($entity->toArray() as $field_name => $field_value) {
+              // Skip identifier fields.
+              if (('id' == $field_name)
+                || ('uuid' == $field_name)
+                || ('xnttid' == $field_name)
+                || ('nid' == $field_name)
+              ) {
+                continue;
+              }
+              if ($field_value != $local_values[$field_name]) {
+                $content_entity->set($field_name, $field_value);
+                $need_update = TRUE;
+              }
+            }
+            if ($need_update) {
+              $context['sandbox']['diff_content']++;
+              if (!empty($params['sync_update_existing'])){
+                $content_entity->save();
+                $context['sandbox']['updated_content']++;
+              }
+            }
+          }
+        }
+      }
+      catch (\Exception $e) {
+        $context['sandbox']['errors'][] = $e->getMessage();
+        \Drupal::logger('xnttmanager')->error(
+          'External entity management batch process error:'
+          . $e->getMessage()
+        );
+      }
+    }
+    $context['sandbox']['offset'] += $batch_size;
+    $context['sandbox']['loaded'] += $loaded;
+    $context['sandbox']['saved'] += $saved;
+    $context['sandbox']['new_annotations'] += $new_annotations;
+    if (!empty($params['save'])) {
+      $context['message'] = t('Loading and saving entities.');
+    }
+    elseif (!empty($params['annotate'])) {
+      $context['message'] = t('Loading entities and adding missing annotations.');
+    }
+    elseif (!empty($params['sync_stats'])) {
+      $context['message'] = t('Computing synchronization statistics.');
+    }
+    elseif (!empty($params['sync'])) {
+      $context['message'] = t('Synchronizing entities.');
+    }
+    else {
+      $context['message'] = t('Loading entities.');
+    }
+    $context['finished'] = $offset / $context['sandbox']['count'];
+  }
+  else {
+    $context['finished'] = 1;
+  }
+  // Get errors if done.
+  if ((!isset($context['finished'])) || (1 <= $context['finished'])) {
+    if ((!empty($params['sync_stats']) || !empty($params['sync']))
+        && (!empty($content_store))
+    ) {
+      // Manage orphans.
+      try {
+        $orphan_ids = $content_store->getQuery()
+          ->accessCheck(FALSE)
+          ->condition('xnttid', $context['sandbox']['existing_xntt_ids'], 'NOT IN')
+          ->execute()
+        ;
+        $context['sandbox']['orphan_content'] = count($orphan_ids);
+        if (!empty($params['sync_remove_orphans'])) {
+          $orphan_entities = $content_store->loadMultiple($orphan_ids);
+          $content_store->delete($orphan_entities);
+          $context['sandbox']['removed_content'] = count($orphan_entities);
+        }
+      }
+      catch (\Exception $e) {
+        $context['sandbox']['errors'][] = $e->getMessage();
+      }
+    }
+
+    $context['message'] = t('All entities were processed.');
+    $context['results']['loaded'] = $context['sandbox']['loaded'];
+    if (!empty($params['save'])) {
+      $context['results']['saved'] = $context['sandbox']['saved'];
+    }
+    if (!empty($params['annotate'])) {
+      $context['results']['new_annotations'] = $context['sandbox']['new_annotations'];
+    }
+    if ((!empty($params['sync_stats'])) || (!empty($params['sync']))) {
+      $context['results']['sync_stats'] = TRUE;
+      $context['results']['missing_content'] = $context['sandbox']['missing_content'];
+      $context['results']['diff_content'] = $context['sandbox']['diff_content'];
+      $context['results']['orphan_content'] = $context['sandbox']['orphan_content'];
+    }
+    if (!empty($params['sync'])) {
+      $context['results']['sync'] = TRUE;
+      $context['results']['created_content'] = $context['sandbox']['created_content'];
+      $context['results']['updated_content'] = $context['sandbox']['updated_content'];
+      $context['results']['removed_content'] = $context['sandbox']['removed_content'];
+    }
+    $context['results']['count'] = $context['sandbox']['count'];
+    $context['results']['errors'] = $context['sandbox']['errors'];
+  }
+}
+
+/**
+ * Callback function for batch process end.
+ */
+function bulkExternalEntitiesFinished($success, $results, $operations) {
+  if ($success) {
+    $message = '';
+    if (!empty($results['loaded'])) {
+      $message .=
+        \Drupal::translation()->formatPlural(
+          $results['loaded'],
+          'Successfully loaded 1 external entity',
+          'Successfully loaded @count external entities'
+        )
+        . \Drupal::translation()->formatPlural(
+          $results['count'],
+          ' over a total of 1 external entity.',
+          ' over a total of @count external entities.'
+        )
+        . "\n"
+      ;
+    }
+    if (!empty($results['saved'])) {
+      $message .=
+        \Drupal::translation()->formatPlural(
+          $results['saved'],
+          'Successfully saved 1 external entity.',
+          'Successfully saved @count external entities.'
+        )
+        . "\n"
+      ;
+    }
+    if (!empty($results['new_annotations'])) {
+      $message .=
+        \Drupal::translation()->formatPlural(
+          $results['new_annotations'],
+          'Successfully added 1 annotation.',
+          'Successfully added @count annotations.'
+        )
+        . "\n"
+      ;
+    }
+    elseif (array_key_exists('new_annotations', $results)) {
+      $message .= t(
+        'No new annotation added.'
+      );
+    }
+    if (!empty($results['sync_stats'])) {
+      $message .=
+        t(
+          "External content without corresponding local content: @missing\nLocal content different from external content: @diff\nLocal content without corresponding external content: @orphans\n",
+          [
+            '@missing' => $results['missing_content'],
+            '@diff' => $results['diff_content'],
+            '@orphans' => $results['orphan_content'],
+          ]
+        )
+      ;
+    }
+    if (!empty($results['sync'])) {
+      $message .=
+        t(
+          "Created local content: @created\nUpdated local content: @updated\nRemoved local content: @removed\n",
+          [
+            '@created' => $results['created_content'],
+            '@updated' => $results['updated_content'],
+            '@removed' => $results['removed_content'],
+          ]
+        )
+      ;
+    }
+    if (!empty($results['errors'])) {
+      $error_types = array_unique($results['errors']);
+      if (!empty($results['saved'])) {
+        $message .=
+          \Drupal::translation()->formatPlural(
+            count($results['errors']),
+            'One error occurred during loading or saving of an entity.',
+            '@count errors occurred during loading or saving of entities.'
+          )
+          . "\n"
+        ;
+      }
+      else {
+        $message .=
+          \Drupal::translation()->formatPlural(
+            count($results['errors']),
+            'One error occurred during loading of an entity.',
+            '@count errors occurred during loading of entities.'
+          )
+          . "\n"
+        ;
+      }
+      $message .=
+        \Drupal::translation()->formatPlural(
+          count($error_types),
+          'Only one type of error occurred.',
+          '@count types of error occurred.'
+        )
+        . "\n"
+      ;
+    }
+    if (empty($message)) {
+      $message = t('No external entity processed.');
+    }
+    \Drupal::logger('xnttmanager')->notice($message);
+    \Drupal::messenger()->addStatus($message);
+
+  }
+}  

@@ -1,0 +1,78 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the external_entities module.
+ */
+
+/**
+ * Implements hook_requirements().
+ */
+function external_entities_requirements($phase) {
+  $requirements = [];
+
+  if ($phase === 'install' || $phase === 'runtime') {
+    if (!class_exists('\JsonPath\JsonObject')) {
+      $requirements['external_entities_jsonpath'] = [
+        'title' => t('Galbar JSONPath library'),
+        'description' => t("External entities requires the galbar/jsonpath library."),
+        'severity' => REQUIREMENT_ERROR,
+      ];
+    }
+  }
+
+  return $requirements;
+}
+
+/**
+ * Create the database schema for external entity types.
+ */
+function external_entities_update_8201() {
+  // Prior to https://www.drupal.org/project/external_entities/issues/3056426
+  // the database schema for external entity types was not created. This update
+  // script creates the database schema for all existing external entity types.
+  $external_entity_type_config = \Drupal::entityTypeManager()->getDefinition('external_entity_type');
+
+  $external_entity_types = \Drupal::entityTypeManager()->createHandlerInstance(
+    $external_entity_type_config->getHandlerClass('storage'),
+    $external_entity_type_config
+  )->loadMultiple();
+
+  foreach ($external_entity_types as $id => $entity_type) {
+    $entity_type = \Drupal::entityTypeManager()->getDefinition($id);
+    \Drupal::service('entity_type.listener')
+      ->onEntityTypeCreate($entity_type);
+  }
+}
+
+/**
+ * Enable submodule for installations that were relying on it.
+ */
+function external_entities_update_8202() {
+  \Drupal::service('module_installer')->install(['external_entities_pathauto']);
+}
+
+/**
+ * Migrate (simple) field mappings to the new pluggable field mapper.
+ */
+function external_entities_update_8203() {
+  $external_entity_type_config = \Drupal::entityTypeManager()->getDefinition('external_entity_type');
+  $external_entity_types = \Drupal::entityTypeManager()->createHandlerInstance(
+    $external_entity_type_config->getHandlerClass('storage'),
+    $external_entity_type_config
+  )->loadMultiple();
+
+  foreach ($external_entity_types as $entity_type_id => $entity_type) {
+    /** @var \Drupal\Core\Config\Config $config */
+    $config = \Drupal::configFactory()->getEditable("external_entities.external_entity_type.{$entity_type_id}");
+
+    $field_mappings = $config->get('field_mappings');
+    if (!empty($field_mappings)) {
+      $config->set('field_mapper_id', 'simple');
+      $config->set('field_mapper_config.field_mappings', $field_mappings);
+    }
+
+    $config->clear('field_mappings');
+    $config->save();
+  }
+}

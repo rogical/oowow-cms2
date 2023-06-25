@@ -1,0 +1,10 @@
+name: 'External entities tests'
+type: module
+description: 'Support module for external entities related testing.'
+package: Testing
+# version: VERSION
+
+# Information added by Drupal.org packaging script on 2023-05-18
+version: '8.x-2.0-alpha6'
+project: 'external_entities'
+datestamp: 1684406078

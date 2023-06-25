@@ -1,0 +1,19 @@
+<?php
+
+/**
+ * @file
+ * Hooks for external_entities_pathauto.
+ */
+
+use Drupal\external_entities_pathauto\Plugin\pathauto\AliasType\ExternalEntityAliasTypeBase;
+
+/**
+ * Implements hook_pathauto_alias_types_alter().
+ */
+function external_entities_pathauto_alias_types_alter(&$types) {
+  foreach (array_keys($types) as $plugin_id) {
+    if (!empty($types[$plugin_id]['provider']) && $types[$plugin_id]['provider'] === 'external_entities') {
+      $types[$plugin_id]['class'] = ExternalEntityAliasTypeBase::class;
+    }
+  }
+}

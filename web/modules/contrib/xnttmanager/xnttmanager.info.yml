@@ -1,0 +1,13 @@
+name: External Entities Manager
+type: module
+description: Provides an administrator interface to External Entities enabling field discovery and synchronization of local content.
+package: External Entities
+core_version_requirement: ^8.8 || ^9 || ^10
+dependencies:
+  - external_entities:external_entities
+
+
+# Information added by Drupal.org packaging script on 2023-01-20
+version: '1.0.0-beta2'
+project: 'xnttmanager'
+datestamp: 1674228677

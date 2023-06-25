@@ -1,0 +1,56 @@
+entity.xnttsync.list:
+  path: '/xntt/sync/list'
+  defaults:
+    _entity_list: xnttsync
+    _title: 'External Entity Synchronization'
+  requirements:
+    _permission: 'Administer external entity types'
+
+entity.xnttsync.add_form:
+  path: '/xntt/sync/add'
+  defaults:
+    _title: 'Add synchronization cron'
+    _entity_form: xnttsync.add
+  requirements:
+    _entity_create_access: xnttsync
+
+entity.xnttsync.edit_form:
+  path: '/xntt/sync/manage/{xnttsync}'
+  defaults:
+    _title: 'Edit synchronization cron'
+    _entity_form: xnttsync.edit
+  requirements:
+    _entity_access: xnttsync.update
+
+entity.xnttsync.delete_form:
+  path: '/xntt/sync/manage/{xnttsync}/delete'
+  defaults:
+    _title: 'Delete synchronization cron'
+    _entity_form: xnttsync.delete
+  requirements:
+    _entity_access: xnttsync.delete
+
+xnttmanager.sync:
+  path: '/xntt/sync'
+  defaults:
+    _title: 'External Entity Synchronization'
+    _entity_form: xnttsync.sync
+  requirements:
+    _entity_create_access: xnttsync
+    _permission: 'Administer external entity types'
+
+xnttmanager.management:
+  path: '/xntt/manage'
+  defaults:
+    _form:  '\Drupal\xnttmanager\Form\ManagementForm'
+    _title: 'External Entities Management'
+  requirements:
+    _permission: 'Administer external entity types'
+
+xnttmanager.inspect:
+  path: '/xntt/inspect/{xntt_type}/{xntt_id}'
+  defaults:
+    _controller: '\Drupal\xnttmanager\Controller\XnttInspector::inspect'
+    xntt_id: ''
+  requirements:
+    _permission: 'Administer external entity types'

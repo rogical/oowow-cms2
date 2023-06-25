@@ -24,6 +24,10 @@ class ComposerStaticInit625f8cae6e38299351ed1d30333c2615
     );
 
     public static $prefixLengthsPsr4 = array (
+        'U' => 
+        array (
+            'Utilities\\' => 10,
+        ),
         'T' => 
         array (
             'Twig\\' => 5,
@@ -70,6 +74,10 @@ class ComposerStaticInit625f8cae6e38299351ed1d30333c2615
         array (
             'Masterminds\\' => 12,
         ),
+        'J' => 
+        array (
+            'JsonPath\\' => 9,
+        ),
         'G' => 
         array (
             'GuzzleHttp\\Psr7\\' => 16,
@@ -101,6 +109,10 @@ class ComposerStaticInit625f8cae6e38299351ed1d30333c2615
     );
 
     public static $prefixDirsPsr4 = array (
+        'Utilities\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/galbar/jsonpath/src/Galbar/Utilities',
+        ),
         'Twig\\' => 
         array (
             0 => __DIR__ . '/..' . '/twig/twig/src',
@@ -215,8 +227,8 @@ class ComposerStaticInit625f8cae6e38299351ed1d30333c2615
         ),
         'Psr\\Http\\Message\\' => 
         array (
-            0 => __DIR__ . '/..' . '/psr/http-message/src',
-            1 => __DIR__ . '/..' . '/psr/http-factory/src',
+            0 => __DIR__ . '/..' . '/psr/http-factory/src',
+            1 => __DIR__ . '/..' . '/psr/http-message/src',
         ),
         'Psr\\Http\\Client\\' => 
         array (
@@ -237,6 +249,10 @@ class ComposerStaticInit625f8cae6e38299351ed1d30333c2615
         'Masterminds\\' => 
         array (
             0 => __DIR__ . '/..' . '/masterminds/html5/src',
+        ),
+        'JsonPath\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/galbar/jsonpath/src/Galbar/JsonPath',
         ),
         'GuzzleHttp\\Psr7\\' => 
         array (

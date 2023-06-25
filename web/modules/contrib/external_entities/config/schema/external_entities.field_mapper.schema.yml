@@ -1,0 +1,41 @@
+plugin.plugin_configuration.external_entities_field_mapper.simple:
+  type: config_object
+  label: 'External entities simple field mapper settings'
+  mapping:
+    field_mappings:
+      type: sequence
+      label: 'Field mappings'
+      sequence:
+        type: sequence
+        label: 'Field property mappings'
+        sequence:
+          type: label
+          label: 'Field property mapping'
+
+plugin.plugin_configuration.external_entities_field_mapper.jsonpath:
+  type: config_object
+  label: 'External entities JSONPath field mapper settings'
+  mapping:
+    field_mappings:
+      type: sequence
+      label: 'Field mappings'
+      sequence:
+        type: sequence
+        label: 'Field property mappings'
+        sequence:
+          type: label
+          label: 'Field property mapping'
+
+plugin.plugin_configuration.external_entities_field_mapper.*:
+  type: config_object
+  label: 'External entities JSONPath field mapper settings'
+  mapping:
+    field_mappings:
+      type: sequence
+      label: 'Field mappings'
+      sequence:
+        type: sequence
+        label: 'Field property mappings'
+        sequence:
+          type: label
+          label: 'Field property mapping'

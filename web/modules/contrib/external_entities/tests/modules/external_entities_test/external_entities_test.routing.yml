@@ -1,0 +1,36 @@
+external_entities_test.simple:
+  path: '/external-entities-test/simple'
+  defaults:
+    _controller: '\Drupal\external_entities_test\Controller\ExternalEntitiesJsonController::simple'
+    _title: 'Simple JSON'
+  requirements:
+    _permission: 'access content'
+external_entities_test.simple_get:
+  path: '/external-entities-test/simple/{uuid}'
+  defaults:
+    _controller: '\Drupal\external_entities_test\Controller\ExternalEntitiesJsonController::simpleGet'
+    _title: 'Simple JSON'
+  requirements:
+    _permission: 'access content'
+external_entities_test.simple_set:
+  methods: [POST, PUT]
+  path: '/external-entities-test/simple/{uuid}'
+  defaults:
+    _controller: '\Drupal\external_entities_test\Controller\ExternalEntitiesJsonController::simpleSet'
+    _title: 'Simple JSON'
+  requirements:
+    _permission: 'access content'
+external_entities_test.ref:
+  path: '/external-entities-test/ref'
+  defaults:
+    _controller: '\Drupal\external_entities_test\Controller\ExternalEntitiesJsonController::ref'
+    _title: 'ref JSON'
+  requirements:
+    _permission: 'access content'
+external_entities_test.ref_get:
+  path: '/external-entities-test/ref/{uuid}'
+  defaults:
+    _controller: '\Drupal\external_entities_test\Controller\ExternalEntitiesJsonController::refGet'
+    _title: 'ref JSON'
+  requirements:
+    _permission: 'access content'

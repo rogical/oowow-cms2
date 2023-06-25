@@ -1,0 +1,16 @@
+{
+    "name": "drupal/external_entities",
+    "description": "Allows using remote entities, for example through a REST interface.",
+    "type": "drupal-module",
+    "homepage": "https://www.drupal.org/project/external_entities",
+    "support": {
+        "issues": "http://drupal.org/project/issues/external_entities",
+        "source": "http://cgit.drupalcode.org/external_entities"
+    },
+    "require": {
+        "galbar/jsonpath": "^2.0"
+    },
+    "require-dev": {
+        "drupal/inline_entity_form": "^1.0"
+    }
+}

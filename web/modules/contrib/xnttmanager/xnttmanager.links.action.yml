@@ -1,0 +1,12 @@
+xnttmanager.add_action:
+  route_name: entity.xnttsync.add_form
+  title: 'Add External Entities Synchronization'
+  appears_on:
+    - entity.xnttsync.list
+
+xnttmanager.list_action:
+  route_name: entity.xnttsync.list
+  title: 'List External Entities Synchronizations'
+  appears_on:
+    - entity.xnttsync.add_form
+    - entity.xnttsync.edit_form

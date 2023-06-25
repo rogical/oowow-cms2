@@ -1,0 +1,437 @@
+<?php
+
+/**
+ * @file
+ * Allows using remote entities, for example through a REST interface.
+ */
+
+use Drupal\Core\Entity\ContentEntityType;
+use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
+use Drupal\Core\Entity\EntityFormInterface;
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Entity\EntityTypeInterface;
+use Drupal\Core\Entity\FieldableEntityInterface;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Url;
+use Drupal\external_entities\ExternalEntityInterface;
+use Drupal\external_entities\ExternalEntityStorageInterface;
+use Drupal\external_entities\ExternalEntityTypeInterface;
+use Drupal\external_entities\Plugin\Field\AnnotationTitleFieldItemList;
+use Drupal\Core\Render\Element;
+
+/**
+ * Property indicating if the annotated external entity should not be saved.
+ *
+ * When an annotation is saved the associated external entity is saved as well.
+ * Sometimes this is undesired behavior and can therefor be prevent by setting
+ * this property on the annotation entity object before saving.
+ *
+ * @code
+ * $annotation->BYPASS_ANNOTATED_EXTERNAL_ENTITY_SAVE = TRUE;
+ * // Save the annotation without triggering an external entity save.
+ * $annotation->save();
+ * @endcode
+ *
+ * @see _external_entities_process_annotation_changes()
+ * @see \Drupal\external_entities\Form\ExternalEntityForm
+ *
+ * @internal
+ */
+define('EXTERNAL_ENTITIES_BYPASS_ANNOTATED_EXTERNAL_ENTITY_SAVE_PROPERTY', 'BYPASS_ANNOTATED_EXTERNAL_ENTITY_SAVE');
+
+/**
+ * Implements hook_entity_type_build().
+ */
+function external_entities_entity_type_build(array &$entity_types) {
+  // Check for the external_entity_type config entity.
+  if (!empty($entity_types['external_entity_type'])) {
+    $external_entity_type_config = $entity_types['external_entity_type'];
+
+    // Get the existing external entity type configurations.
+    /* @var \Drupal\external_entities\ExternalEntityTypeInterface[] $external_entity_types */
+    $external_entity_types = \Drupal::entityTypeManager()->createHandlerInstance(
+      $external_entity_type_config->getHandlerClass('storage'),
+      $external_entity_type_config
+    )->loadMultiple();
+
+    // Base definitions for each external entity type.
+    $base_definition = [
+      'handlers' => [
+        'storage' => 'Drupal\external_entities\ExternalEntityStorage',
+        'view_builder' => 'Drupal\Core\Entity\EntityViewBuilder',
+        'form' => [
+          'default' => 'Drupal\external_entities\Form\ExternalEntityForm',
+          'edit' => 'Drupal\external_entities\Form\ExternalEntityForm',
+          'delete' => 'Drupal\Core\Entity\ContentEntityDeleteForm',
+        ],
+        'list_builder' => 'Drupal\external_entities\ExternalEntityListBuilder',
+        'access' => 'Drupal\external_entities\ExternalEntityAccessControlHandler',
+        'route_provider' => [
+          'html' => 'Drupal\external_entities\Routing\ExternalEntityHtmlRouteProvider',
+        ],
+      ],
+      'entity_keys' => [
+        'id' => 'id',
+        'uuid' => 'uuid',
+        'label' => 'title',
+      ],
+      'provider' => 'external_entities',
+      'class' => 'Drupal\external_entities\Entity\ExternalEntity',
+      'admin_permission' => 'administer external entity types',
+      'group' => 'content',
+      'group_label' => t('Content'),
+    ];
+
+    // Add custom particular definitions for each external entity type.
+    foreach ($external_entity_types as $external_entity_type) {
+      // Definitions for the entity type.
+      $definition = [
+        'id' => $external_entity_type->id(),
+        'label' => t($external_entity_type->getLabel()),
+        'label_plural' => t($external_entity_type->getPluralLabel()),
+        'label_collection' => t($external_entity_type->getPluralLabel()),
+        'links' => [
+          'collection' => "/{$external_entity_type->getBasePath()}",
+          'canonical' => "/{$external_entity_type->getBasePath()}/{{$external_entity_type->id()}}",
+        ],
+        'field_ui_base_route' => 'entity.external_entity_type.' . $external_entity_type->id() . '.edit_form',
+        'permission_granularity' => 'entity_type',
+        'persistent_cache' => (bool) $external_entity_type->getPersistentCacheMaxAge(),
+      ];
+
+      if (!$external_entity_type->isReadOnly() || $external_entity_type->isAnnotatable()) {
+        $definition['links']['add-form'] = "/{$external_entity_type->getBasePath()}/add";
+        $definition['links']['edit-form'] = "/{$external_entity_type->getBasePath()}/{{$external_entity_type->id()}}/edit";
+        $definition['links']['delete-form'] = "/{$external_entity_type->getBasePath()}/{{$external_entity_type->id()}}/delete";
+      }
+
+      // Merge the definitions.
+      $definition = array_merge($definition, $base_definition);
+      // Add the new content entity to the entity types.
+      $entity_types[$definition['id']] = new ContentEntityType($definition);
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_operation().
+ *
+ * We need to generate Field UI operations (manage fields and displays) manually
+ * because the Field UI module only provides them for entity bundles, not entity
+ * types.
+ *
+ * @see field_ui_entity_operation()
+ */
+function external_entities_entity_operation(EntityInterface $entity) {
+  $operations = [];
+
+  if ($entity instanceof ExternalEntityTypeInterface && \Drupal::service('module_handler')->moduleExists('field_ui')) {
+    /* @var \Drupal\external_entities\ExternalEntityTypeInterface $entity */
+    $derived_entity_type = $entity->getDerivedEntityType();
+    $account = \Drupal::currentUser();
+    if ($account->hasPermission('administer ' . $derived_entity_type->id() . ' fields')) {
+      $operations['manage-fields'] = [
+        'title' => t('Manage fields'),
+        'weight' => 15,
+        'url' => Url::fromRoute("entity.{$derived_entity_type->id()}.field_ui_fields"),
+      ];
+    }
+    if ($account->hasPermission('administer ' . $derived_entity_type->id() . ' form display')) {
+      $operations['manage-form-display'] = [
+        'title' => t('Manage form display'),
+        'weight' => 20,
+        'url' => Url::fromRoute("entity.entity_form_display.{$derived_entity_type->id()}.default"),
+      ];
+    }
+    if ($account->hasPermission('administer ' . $derived_entity_type->id() . ' display')) {
+      $operations['manage-display'] = [
+        'title' => t('Manage display'),
+        'weight' => 25,
+        'url' => Url::fromRoute("entity.entity_view_display.{$derived_entity_type->id()}.default"),
+      ];
+    }
+  }
+
+  return $operations;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for 'field_storage_config_edit_form'.
+ *
+ * Replace the default cardinality form validation. External entity field values
+ * reside in an external storage making the higher delta checks unnecessary.
+ */
+function external_entities_form_field_storage_config_edit_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+  if (!empty($form['cardinality_container']['#element_validate'])) {
+    $entity_type = \Drupal::entityTypeManager()->getDefinition($form_state->get('entity_type_id'));
+    if ($entity_type && $entity_type->getProvider() === 'external_entities') {
+      $key = array_search('::validateCardinality', $form['cardinality_container']['#element_validate']);
+      if ($key !== FALSE) {
+        $form['cardinality_container']['#element_validate'][$key] = 'external_entities_field_storage_config_edit_form_validate_cardinality';
+      }
+    }
+  }
+}
+
+/**
+ * Validates the cardinality form for external entities.
+ *
+ * This validates a subset of what the core cardinality validation validates.
+ *
+ * @param array $element
+ *   The cardinality form render array.
+ * @param \Drupal\Core\Form\FormStateInterface $form_state
+ *   The form state.
+ *
+ * @see \Drupal\field_ui\Form\FieldStorageConfigEditForm::validateCardinality()
+ */
+function external_entities_field_storage_config_edit_form_validate_cardinality(array &$element, FormStateInterface $form_state) {
+  if ($form_state->getValue('cardinality') === 'number' && !$form_state->getValue('cardinality_number')) {
+    $form_state->setError($element['cardinality_number'], t('Number of values is required.'));
+  }
+}
+
+/**
+ * Implements hook_inline_entity_form_entity_form_alter().
+ */
+function external_entities_inline_entity_form_entity_form_alter(&$entity_form, FormStateInterface $form_state) {
+  $form_object = $form_state->getFormObject();
+  if (!$form_object instanceof EntityFormInterface) {
+    return;
+  }
+
+  /* @var \Drupal\Core\Entity\FieldableEntityInterface $annotation_entity */
+  $annotation_entity = $entity_form['#entity'];
+  $external_entity = $form_object->getEntity();
+  if ($annotation_entity->isNew() && $external_entity instanceof ExternalEntityInterface) {
+    $external_entity_type = $external_entity->getExternalEntityType();
+    if ($external_entity_type->isAnnotatable()
+      && $entity_form['#entity_type'] === $external_entity_type->getAnnotationEntityTypeId()
+      && $entity_form['#bundle'] === $external_entity_type->getAnnotationBundleId()) {
+      // Automatically set the reference to the external entity and hide the
+      // field altogether.
+      $annotation_reference_field_name = $external_entity_type->getAnnotationFieldName();
+      $annotation_entity->set($annotation_reference_field_name, $external_entity->id());
+      if (!empty($entity_form[$annotation_reference_field_name])) {
+        $entity_form[$annotation_reference_field_name]['#access'] = FALSE;
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_bundle_field_info_alter().
+ */
+function external_entities_entity_bundle_field_info_alter(&$fields, EntityTypeInterface $entity_type, $bundle) {
+  $label_key = $entity_type->getKey('label');
+  if (!$label_key) {
+    return;
+  }
+
+  $count = \Drupal::entityQuery('external_entity_type')
+    ->condition('annotation_entity_type_id', $entity_type->id())
+    ->condition('annotation_bundle_id', $bundle)
+    ->count()
+    ->execute();
+  if (!$count) {
+    return;
+  }
+
+  /* @var \Drupal\Core\Field\BaseFieldDefinition[] $base_field_definitions */
+  $base_field_definitions = call_user_func($entity_type->getClass() . '::baseFieldDefinitions', $entity_type);
+  if (!empty($base_field_definitions[$label_key])) {
+    $fields[$label_key] = clone $base_field_definitions[$label_key]
+      ->setName($label_key)
+      ->setTargetEntityTypeId($entity_type->id())
+      ->setTargetBundle($bundle)
+      ->setClass(AnnotationTitleFieldItemList::class)
+      ->setComputed(TRUE)
+      ->setReadOnly(TRUE)
+      ->setDisplayOptions('form', [
+        'region' => 'hidden',
+      ])
+      ->setDisplayConfigurable('form', FALSE);
+  }
+}
+
+/**
+ * Implements hook_theme().
+ */
+function external_entities_theme() {
+  return [
+    'external_entity' => [
+      'render element' => 'elements',
+    ],
+  ];
+}
+
+/**
+ * Implements hook_theme_suggestions_HOOK().
+ */
+function external_entities_theme_suggestions_external_entity(array $variables) {
+  /** @var \Drupal\external_entities\ExternalEntityInterface $entity */
+  $entity = $variables['elements']['#entity'];
+  $sanitized_view_mode = strtr($variables['elements']['#view_mode'], '.', '_');
+
+  $suggestions[] = 'external_entity__' . $sanitized_view_mode;
+  $suggestions[] = 'external_entity__' . $entity->getEntityTypeId();
+  $suggestions[] = 'external_entity__' . $entity->getEntityTypeId() . '__' . $sanitized_view_mode;
+  $suggestions[] = 'external_entity__' . $entity->getEntityTypeId() . '__' . $entity->bundle();
+  $suggestions[] = 'external_entity__' . $entity->getEntityTypeId() . '__' . $entity->bundle() . '__' . $sanitized_view_mode;
+  $suggestions[] = 'external_entity__' . $entity->id();
+  $suggestions[] = 'external_entity__' . $entity->id() . '__' . $sanitized_view_mode;
+
+  return $suggestions;
+}
+
+/**
+ * Implements hook_entity_view_alter().
+ */
+function external_entities_entity_view_alter(array &$build, EntityInterface $entity, EntityViewDisplayInterface $display) {
+  if ($entity instanceof ExternalEntityInterface) {
+    $build['#theme'] = 'external_entity';
+    $build['#entity'] = $entity;
+  }
+}
+
+/**
+ * Implements hook_entity_storage_load().
+ */
+function external_entities_entity_storage_load(array $entities, $entity_type) {
+  /** @var \Drupal\external_entities\Entity\ExternalEntity $external_entity_type */
+  $external_entity_type = \Drupal::entityTypeManager()->getStorage('external_entity_type')->load($entity_type);
+  if (!$external_entity_type) {
+    return;
+  }
+
+  if (!$external_entity_type->automaticallyGenerateAliases()) {
+    return;
+  }
+
+  // Ensure the pathauto module is enabled.
+  $moduleHandler = \Drupal::service('module_handler');
+  if (!$moduleHandler->moduleExists('pathauto')) {
+    return;
+  }
+
+  /** @var \Drupal\pathauto\PathautoGeneratorInterface $pathauto_generator */
+  $pathauto_generator = \Drupal::service('pathauto.generator');
+
+  /** @var \Drupal\path_alias\AliasManagerInterface $path_alias_manager */
+  $path_alias_manager = \Drupal::service('path_alias.manager');
+
+  /** @var \Drupal\external_entities\ExternalEntityInterface $entity */
+  foreach ($entities as $entity) {
+    $path = '/' . $entity->toUrl()->getInternalPath();
+    $alias = $path_alias_manager->getAliasByPath($path, $entity->language()->getId());
+    if ($alias !== $path) {
+      continue;
+    }
+
+    // Generate an alias.
+    $entity->path = $pathauto_generator->updateEntityAlias($entity, 'insert');
+  }
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function external_entities_entity_insert(EntityInterface $entity) {
+  _external_entities_save_annotated_external_entity($entity);
+}
+
+/**
+ * Implements hook_entity_update().
+ */
+function external_entities_entity_update(EntityInterface $entity) {
+  _external_entities_save_annotated_external_entity($entity);
+}
+
+/**
+ * Implements hook_entity_delete().
+ */
+function external_entities_entity_delete(EntityInterface $entity) {
+  _external_entities_save_annotated_external_entity($entity);
+}
+
+/**
+ * Save the annotated external entity.
+ *
+ * Saves the external entity (if any) that the given entity is annotating. We do
+ * this because annotation changes can have indirect changes to an external
+ * entity.
+ *
+ * An example use case: an annotatable external entity is displayed (entity
+ * display) along with various inherited annotation fields. Saving
+ * the external entity on annotation change will make sure the render cache
+ * for the external entity is invalidated and the annotation changes become
+ * visible.
+ *
+ * Another example use case: a pathauto pattern is configured for an annotatable
+ * external entity, and the pattern uses an inherited annotated field. Saving
+ * the external entity on annotation change will make sure the generated path
+ * is updated.
+   *
+   * @param \Drupal\Core\Entity\EntityInterface $entity
+   *   An entity object.
+ *
+ * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+ * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+ * @throws \Drupal\Core\Entity\EntityStorageException
+ */
+function _external_entities_save_annotated_external_entity(EntityInterface $entity) {
+  if (!empty($entity->{EXTERNAL_ENTITIES_BYPASS_ANNOTATED_EXTERNAL_ENTITY_SAVE_PROPERTY})) {
+    return;
+  }
+
+  if (!$entity instanceof FieldableEntityInterface) {
+    return;
+  }
+
+  /* @var \Drupal\external_entities\ExternalEntityTypeInterface[] $external_entity_types */
+  $external_entity_types = \Drupal::entityTypeManager()
+    ->getStorage('external_entity_type')
+    ->loadMultiple();
+  foreach ($external_entity_types as $external_entity_type) {
+    if (!$external_entity_type->isAnnotatable()
+      || $external_entity_type->getAnnotationEntityTypeId() !== $entity->getEntityTypeId()
+      || $external_entity_type->getAnnotationBundleId() !== $entity->bundle()
+      || $entity->get($external_entity_type->getAnnotationFieldName())->isEmpty()
+    ) {
+      continue;
+    }
+
+    /* @var \Drupal\Core\Entity\EntityInterface[] $referenced_entities */
+    $referenced_entities = $entity
+      ->get($external_entity_type->getAnnotationFieldName())
+      ->referencedEntities();
+    foreach ($referenced_entities as $referenced_entity) {
+      if (!$referenced_entity instanceof ExternalEntityInterface) {
+        continue;
+      }
+
+      if (!empty($entity->original) && $external_entity_type->inheritsAnnotationFields()) {
+        $referenced_entity->original = clone $referenced_entity;
+        $referenced_entity->original->mapAnnotationFields($entity->original);
+      }
+      $referenced_entity->{ExternalEntityStorageInterface::BYPASS_STORAGE_CLIENT_SAVE_PROPERTY} = TRUE;
+      $referenced_entity->save();
+    }
+  }
+}
+
+/**
+ * Implements template_preprocess_HOOK().
+ */
+function template_preprocess_external_entity(&$variables) {
+  $variables['external_entity'] = $variables['elements']['#entity'];
+
+  $variables['entity_type'] = $variables['external_entity']->getEntityTypeId();
+  $variables['bundle'] = $variables['external_entity']->bundle();
+
+  // Build the $content variable for templates.
+  $variables += ['content' => []];
+  foreach (Element::children($variables['elements']) as $key) {
+    $variables['content'][$key] = $variables['elements'][$key];
+  }
+}

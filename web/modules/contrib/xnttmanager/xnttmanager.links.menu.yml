@@ -1,0 +1,12 @@
+xnttmanager.menu:
+  title: External Entities Synchronization
+  route_name: xnttmanager.sync
+
+xnttmanager.crons:
+  title: External Entities Synchronization Crons
+  route_name: entity.xnttsync.list
+
+xnttmanager.management_form:
+  title: External Entities Management
+  description: Administration interface to manage external entities.
+  route_name: xnttmanager.management
